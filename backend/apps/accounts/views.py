@@ -1,5 +1,9 @@
+from django.conf import settings
 from django.contrib.auth import update_session_auth_hash
+from django.db import IntegrityError, transaction
+from django.utils.text import slugify
 from rest_framework import generics, status
+from rest_framework.exceptions import AuthenticationFailed, ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -8,12 +12,15 @@ from rest_framework_simplejwt.token_blacklist.models import (
     OutstandingToken,
 )
 from rest_framework_simplejwt.serializers import TokenBlacklistSerializer
+from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
+from .models import User
 from .permissions import IsAdmin
 from .serializers import (
     AgentCreateSerializer,
     CustomTokenObtainPairSerializer,
+    GoogleLoginSerializer,
     PasswordChangeSerializer,
     ProfileSerializer,
     RegisterSerializer,
@@ -27,6 +34,74 @@ class RegisterView(generics.CreateAPIView):
 
 class CustomLoginView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
+
+
+class GoogleLoginView(APIView):
+    permission_classes = [AllowAny]
+
+    @transaction.atomic
+    def post(self, request):
+        serializer = GoogleLoginSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        payload = serializer.context['google_payload']
+
+        email = payload['email'].strip().lower()
+        google_id = payload['sub']
+
+        try:
+            user = User.objects.select_for_update().filter(google_id=google_id).first()
+
+            if user is None:
+                user = User.objects.select_for_update().filter(email__iexact=email).first()
+
+            if user is not None:
+                if user.google_id and user.google_id != google_id:
+                    raise AuthenticationFailed(
+                        'This email is already linked to another Google account.'
+                    )
+                if not user.is_active:
+                    raise AuthenticationFailed('This account is inactive.')
+                if not user.google_id:
+                    user.google_id = google_id
+                    user.save(update_fields=['google_id'])
+            else:
+                base_username = slugify(email.split('@', 1)[0])[:120] or 'google_user'
+                username = base_username
+                suffix = 1
+                while User.objects.filter(username=username).exists():
+                    username = f'{base_username}_{suffix}'
+                    suffix += 1
+
+                user = User.objects.create_user(
+                    username=username,
+                    email=email,
+                    password=None,
+                    google_id=google_id,
+                    role=User.Role.CUSTOMER,
+                )
+        except IntegrityError as exc:
+            raise ValidationError(
+                'An account with this Google email already exists. Please sign in again.'
+            ) from exc
+
+        refresh = RefreshToken.for_user(user)
+        refresh['username'] = user.username
+        refresh['email'] = user.email
+        refresh['role'] = user.role
+
+        return Response(
+            {
+                'refresh': str(refresh),
+                'access': str(refresh.access_token),
+                'user': {
+                    'id': user.id,
+                    'username': user.username,
+                    'email': user.email,
+                    'role': user.role,
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class CustomTokenRefreshView(TokenRefreshView):
@@ -68,7 +143,6 @@ class PasswordChangeView(APIView):
         request.user.save(update_fields=['password'])
         update_session_auth_hash(request, request.user)
 
-        # Revoke every outstanding refresh token for this account.
         for token in OutstandingToken.objects.filter(user=request.user):
             BlacklistedToken.objects.get_or_create(token=token)
 
