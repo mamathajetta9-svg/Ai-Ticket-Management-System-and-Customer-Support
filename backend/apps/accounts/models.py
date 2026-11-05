@@ -25,7 +25,12 @@ class User(AbstractUser):
         CUSTOMER = 'CUSTOMER', 'Customer'
 
     email = models.EmailField(unique=True)
-
+    google_id = models.CharField(
+        max_length=255,
+        unique=True,
+        null=True,
+        blank=True,
+    )
     role = models.CharField(
         max_length=10,
         choices=Role.choices,
