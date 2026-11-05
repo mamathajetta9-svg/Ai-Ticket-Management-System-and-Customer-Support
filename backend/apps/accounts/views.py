@@ -6,13 +6,17 @@ from rest_framework.exceptions import AuthenticationFailed, ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework_simplejwt.serializers import TokenBlacklistSerializer
+from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.token_blacklist.models import (
     BlacklistedToken,
     OutstandingToken,
 )
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+
+from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.settings import api_settings
 
 from .models import User
 from .permissions import IsAdmin
@@ -128,20 +132,43 @@ class MyProfileView(generics.RetrieveAPIView):
         return self.request.user
 
 
+
+
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        serializer = TokenBlacklistSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        refresh = serializer.validated_data["refresh"]
-        if str(refresh.payload.get("user_id")) != str(request.user.pk):
-            raise AuthenticationFailed("Refresh token does not belong to this user.")
-        serializer.save()
+        refresh_token = request.data.get("refresh")
+
+        if not refresh_token:
+            raise ValidationError({
+                "refresh": "This field is required."
+            })
+
+        try:
+            refresh = RefreshToken(refresh_token)
+        except (TokenError, TypeError):
+            raise AuthenticationFailed("Invalid or expired refresh token.")
+
+        # Verify that this refresh token belongs to the logged-in user.
+        token_user_id = refresh.payload.get(api_settings.USER_ID_CLAIM)
+
+        if str(token_user_id) != str(request.user.pk):
+            raise AuthenticationFailed(
+                "Refresh token does not belong to this user."
+            )
+
+        # Blacklist the authenticated user's refresh token.
+        refresh.blacklist()
+
         return Response(
-            {"detail": "Logout successful. Refresh token has been revoked."},
+            {
+                "detail": "Logout successful. Refresh token has been revoked."
+            },
             status=status.HTTP_205_RESET_CONTENT,
         )
+
+
 
 
 class PasswordChangeView(APIView):

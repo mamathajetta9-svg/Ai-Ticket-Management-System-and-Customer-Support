@@ -207,40 +207,61 @@ class AccountAuthenticationTests(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_logout_blacklists_only_own_refresh_token(self):
+def test_logout_blacklists_only_own_refresh_token(self):
         other = User.objects.create_user(
             username="other_customer",
             email="other@example.com",
             password=self.password,
         )
+
         other_refresh = RefreshToken.for_user(other)
+
         self.authenticate_as(self.customer)
+
         response = self.client.post(
             "/api/accounts/logout/",
             {"refresh": str(other_refresh)},
             format="json",
         )
-        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
-    def test_logout_blacklists_own_refresh_token(self):
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+def test_logout_blacklists_own_refresh_token(self):
         refresh = RefreshToken.for_user(self.customer)
+
         self.authenticate_as(self.customer)
+
         response = self.client.post(
             "/api/accounts/logout/",
             {"refresh": str(refresh)},
             format="json",
         )
-        self.assertEqual(response.status_code, status.HTTP_205_RESET_CONTENT)
+
+        # Debug output: shows why logout succeeded or failed.
+        print("LOGOUT RESPONSE:", response.status_code, response.data)
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_205_RESET_CONTENT,
+        )
+
+        # Confirm that the same refresh token can no longer be used.
         refresh_response = self.client.post(
             "/api/accounts/token/refresh/",
             {"refresh": str(refresh)},
             format="json",
         )
-        self.assertEqual(refresh_response.status_code, status.HTTP_401_UNAUTHORIZED)
 
-    @override_settings(GOOGLE_CLIENT_ID="test-google-client-id")
-    @patch("apps.accounts.serializers.verify_google_id_token")
-    def test_google_login_creates_customer_and_returns_jwt(self, verify_token):
+        self.assertEqual(
+            refresh_response.status_code,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+@override_settings(GOOGLE_CLIENT_ID="test-google-client-id")
+@patch("apps.accounts.serializers.verify_google_id_token")
+def test_google_login_creates_customer_and_returns_jwt(self, verify_token):
         verify_token.return_value = {
             "sub": "google-sub-123",
             "email": "newcustomer@example.com",
@@ -258,9 +279,9 @@ class AccountAuthenticationTests(APITestCase):
         self.assertEqual(user.google_id, "google-sub-123")
         self.assertEqual(AccessToken(response.data["access"])["role"], "CUSTOMER")
 
-    @override_settings(GOOGLE_CLIENT_ID="test-google-client-id")
-    @patch("apps.accounts.serializers.verify_google_id_token")
-    def test_google_login_links_existing_verified_email(self, verify_token):
+@override_settings(GOOGLE_CLIENT_ID="test-google-client-id")
+@patch("apps.accounts.serializers.verify_google_id_token")
+def test_google_login_links_existing_verified_email(self, verify_token):
         verify_token.return_value = {
             "sub": "google-sub-existing",
             "email": self.customer.email,
@@ -276,9 +297,9 @@ class AccountAuthenticationTests(APITestCase):
         self.customer.refresh_from_db()
         self.assertEqual(self.customer.google_id, "google-sub-existing")
 
-    @override_settings(GOOGLE_CLIENT_ID="test-google-client-id")
-    @patch("apps.accounts.serializers.verify_google_id_token")
-    def test_google_login_does_not_auto_link_privileged_account(self, verify_token):
+@override_settings(GOOGLE_CLIENT_ID="test-google-client-id")
+@patch("apps.accounts.serializers.verify_google_id_token")
+def test_google_login_does_not_auto_link_privileged_account(self, verify_token):
         admin = User.objects.create_user(
             username="unlinked_admin",
             email="unlinked-admin@example.com",
@@ -300,9 +321,9 @@ class AccountAuthenticationTests(APITestCase):
         admin.refresh_from_db()
         self.assertIsNone(admin.google_id)
 
-    @override_settings(GOOGLE_CLIENT_ID="test-google-client-id")
-    @patch("apps.accounts.serializers.verify_google_id_token")
-    def test_google_login_rejects_unverified_email(self, verify_token):
+@override_settings(GOOGLE_CLIENT_ID="test-google-client-id")
+@patch("apps.accounts.serializers.verify_google_id_token")
+def test_google_login_rejects_unverified_email(self, verify_token):
         verify_token.return_value = {
             "sub": "google-sub-123",
             "email": "unverified@example.com",
@@ -316,9 +337,9 @@ class AccountAuthenticationTests(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    @override_settings(GOOGLE_CLIENT_ID="test-google-client-id")
-    @patch("apps.accounts.serializers.verify_google_id_token")
-    def test_google_login_rejects_invalid_issuer(self, verify_token):
+@override_settings(GOOGLE_CLIENT_ID="test-google-client-id")
+@patch("apps.accounts.serializers.verify_google_id_token")
+def test_google_login_rejects_invalid_issuer(self, verify_token):
         verify_token.return_value = {
             "sub": "google-sub-123",
             "email": "person@example.com",
@@ -332,7 +353,7 @@ class AccountAuthenticationTests(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_google_registration_does_not_grant_privileged_role(self):
+def test_google_registration_does_not_grant_privileged_role(self):
         with patch("apps.accounts.serializers.verify_google_id_token") as verify:
             verify.return_value = {
                 "sub": "google-customer",
