@@ -10,155 +10,231 @@ from .models import User
 
 class AccountAuthenticationTests(APITestCase):
     def setUp(self):
-        self.password = 'StrongPass123!'
+        self.password = "StrongPass123!"
         self.customer = User.objects.create_user(
-            username='customer_one',
-            email='customer@example.com',
+            username="customer_one",
+            email="customer@example.com",
             password=self.password,
             role=User.Role.CUSTOMER,
         )
 
     def test_login_with_username(self):
         response = self.client.post(
-            '/api/accounts/login/',
-            {'username': 'customer_one', 'password': self.password},
-            format='json',
+            "/api/accounts/login/",
+            {"username": "customer_one", "password": self.password},
+            format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIn('access', response.data)
-        self.assertIn('refresh', response.data)
+        self.assertIn("access", response.data)
+        self.assertIn("refresh", response.data)
 
-    def test_login_with_email(self):
+    def test_login_with_case_insensitive_email(self):
         response = self.client.post(
-            '/api/accounts/login/',
-            {'username': 'CUSTOMER@example.com', 'password': self.password},
-            format='json',
+            "/api/accounts/login/",
+            {"username": "CUSTOMER@example.com", "password": self.password},
+            format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIn('access', response.data)
+        self.assertIn("access", response.data)
+
+    def test_invalid_login_is_rejected(self):
+        response = self.client.post(
+            "/api/accounts/login/",
+            {"username": "customer_one", "password": "wrong"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_registration_cannot_choose_privileged_role(self):
+        response = self.client.post(
+            "/api/accounts/register/",
+            {
+                "username": "new_customer",
+                "email": "new@example.com",
+                "password": "AnotherStrongPass123!",
+                "role": "ADMIN",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(
+            User.objects.get(username="new_customer").role,
+            User.Role.CUSTOMER,
+        )
 
     def test_customer_cannot_create_agent(self):
         self.client.force_authenticate(user=self.customer)
         response = self.client.post(
-            '/api/accounts/agents/',
+            "/api/accounts/agents/",
             {
-                'username': 'new_agent',
-                'email': 'agent@example.com',
-                'password': 'AnotherStrongPass123!',
+                "username": "new_agent",
+                "email": "agent@example.com",
+                "password": "AnotherStrongPass123!",
             },
-            format='json',
+            format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_admin_can_create_agent(self):
         admin = User.objects.create_user(
-            username='system_admin',
-            email='admin@example.com',
+            username="system_admin",
+            email="admin@example.com",
             password=self.password,
             role=User.Role.ADMIN,
         )
         self.client.force_authenticate(user=admin)
         response = self.client.post(
-            '/api/accounts/agents/',
+            "/api/accounts/agents/",
             {
-                'username': 'new_agent',
-                'email': 'agent@example.com',
-                'password': 'AnotherStrongPass123!',
+                "username": "new_agent",
+                "email": "agent@example.com",
+                "password": "AnotherStrongPass123!",
             },
-            format='json',
+            format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(
-            User.objects.get(username='new_agent').role,
-            User.Role.AGENT,
+        self.assertEqual(User.objects.get(username="new_agent").role, User.Role.AGENT)
+
+    def test_inactive_admin_cannot_create_agent(self):
+        admin = User.objects.create_user(
+            username="inactive_admin",
+            email="inactive-admin@example.com",
+            password=self.password,
+            role=User.Role.ADMIN,
+            is_active=False,
         )
+        self.client.force_authenticate(user=admin)
+        response = self.client.post(
+            "/api/accounts/agents/",
+            {
+                "username": "blocked_agent",
+                "email": "blocked@example.com",
+                "password": "AnotherStrongPass123!",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_password_change_revokes_refresh_tokens(self):
         refresh = RefreshToken.for_user(self.customer)
         self.client.force_authenticate(user=self.customer)
         response = self.client.post(
-            '/api/accounts/password/change/',
+            "/api/accounts/password/change/",
             {
-                'old_password': self.password,
-                'new_password': 'NewStrongPass456!',
+                "old_password": self.password,
+                "new_password": "NewStrongPass456!",
             },
-            format='json',
+            format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.customer.refresh_from_db()
-        self.assertTrue(self.customer.check_password('NewStrongPass456!'))
+        self.assertTrue(self.customer.check_password("NewStrongPass456!"))
         refresh_response = self.client.post(
-            '/api/accounts/token/refresh/',
-            {'refresh': str(refresh)},
-            format='json',
+            "/api/accounts/token/refresh/",
+            {"refresh": str(refresh)},
+            format="json",
         )
         self.assertEqual(
-            refresh_response.status_code,
-            status.HTTP_401_UNAUTHORIZED,
+            refresh_response.status_code, status.HTTP_401_UNAUTHORIZED
         )
 
-    def test_logout_blacklists_refresh_token(self):
+    def test_password_change_rejects_wrong_current_password(self):
+        self.client.force_authenticate(user=self.customer)
+        response = self.client.post(
+            "/api/accounts/password/change/",
+            {
+                "old_password": "not-the-password",
+                "new_password": "NewStrongPass456!",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_logout_blacklists_own_refresh_token(self):
         refresh = RefreshToken.for_user(self.customer)
         self.client.force_authenticate(user=self.customer)
         response = self.client.post(
-            '/api/accounts/logout/',
-            {'refresh': str(refresh)},
-            format='json',
+            "/api/accounts/logout/",
+            {"refresh": str(refresh)},
+            format="json",
         )
-        self.assertEqual(
-            response.status_code,
-            status.HTTP_205_RESET_CONTENT,
-        )
+        self.assertEqual(response.status_code, status.HTTP_205_RESET_CONTENT)
         refresh_response = self.client.post(
-            '/api/accounts/token/refresh/',
-            {'refresh': str(refresh)},
-            format='json',
+            "/api/accounts/token/refresh/", {"refresh": str(refresh)}, format="json"
         )
         self.assertEqual(
-            refresh_response.status_code,
-            status.HTTP_401_UNAUTHORIZED,
+            refresh_response.status_code, status.HTTP_401_UNAUTHORIZED
         )
 
-    @override_settings(GOOGLE_CLIENT_ID='test-google-client-id')
-    @patch('apps.accounts.serializers.verify_google_id_token')
-    def test_google_login_creates_customer_and_returns_jwt(self, verify_token):
-        verify_token.return_value = {
-            'sub': 'google-sub-123',
-            'email': 'newcustomer@example.com',
-            'email_verified': True,
-        }
-
+    def test_user_cannot_blacklist_another_users_refresh_token(self):
+        other = User.objects.create_user(
+            username="other_user",
+            email="other@example.com",
+            password=self.password,
+        )
+        other_refresh = RefreshToken.for_user(other)
+        self.client.force_authenticate(user=self.customer)
         response = self.client.post(
-            '/api/accounts/google/',
-            {'id_token': 'fake-id-token'},
-            format='json',
+            "/api/accounts/logout/",
+            {"refresh": str(other_refresh)},
+            format="json",
         )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
+    def test_profile_requires_authentication(self):
+        response = self.client.get("/api/accounts/profile/")
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    @override_settings(GOOGLE_CLIENT_ID="test-google-client-id")
+    @patch("apps.accounts.serializers.verify_google_id_token")
+    def test_google_login_creates_customer(self, verify_token):
+        verify_token.return_value = {
+            "sub": "google-sub-123",
+            "email": "newcustomer@example.com",
+            "email_verified": True,
+        }
+        response = self.client.post(
+            "/api/accounts/google/",
+            {"id_token": "fake-id-token"},
+            format="json",
+        )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data['user']['role'], User.Role.CUSTOMER)
+        self.assertEqual(response.data["user"]["role"], User.Role.CUSTOMER)
         self.assertTrue(
             User.objects.filter(
-                email='newcustomer@example.com',
-                google_id='google-sub-123',
+                email="newcustomer@example.com", google_id="google-sub-123"
             ).exists()
         )
-        self.assertIn('access', response.data)
+        self.assertIn("access", response.data)
 
-    @override_settings(GOOGLE_CLIENT_ID='test-google-client-id')
-    @patch('apps.accounts.serializers.verify_google_id_token')
+    @override_settings(GOOGLE_CLIENT_ID="test-google-client-id")
+    @patch("apps.accounts.serializers.verify_google_id_token")
     def test_google_login_links_existing_verified_email(self, verify_token):
         verify_token.return_value = {
-            'sub': 'google-sub-existing',
-            'email': self.customer.email,
-            'email_verified': True,
+            "sub": "google-sub-existing",
+            "email": self.customer.email,
+            "email_verified": True,
         }
-
         response = self.client.post(
-            '/api/accounts/google/',
-            {'id_token': 'fake-id-token'},
-            format='json',
+            "/api/accounts/google/",
+            {"id_token": "fake-id-token"},
+            format="json",
         )
-
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.customer.refresh_from_db()
-        self.assertEqual(self.customer.google_id, 'google-sub-existing')
+        self.assertEqual(self.customer.google_id, "google-sub-existing")
+
+    @override_settings(GOOGLE_CLIENT_ID="test-google-client-id")
+    @patch("apps.accounts.serializers.verify_google_id_token")
+    def test_google_login_rejects_unverified_email(self, verify_token):
+        verify_token.return_value = {
+            "sub": "google-sub-unverified",
+            "email": "unverified@example.com",
+            "email_verified": False,
+        }
+        response = self.client.post(
+            "/api/accounts/google/",
+            {"id_token": "fake-id-token"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
