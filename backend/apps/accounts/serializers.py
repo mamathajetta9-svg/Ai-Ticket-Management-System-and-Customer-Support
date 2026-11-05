@@ -1,11 +1,24 @@
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth import authenticate
+from django.conf import settings
 from django.db.models import Q
 from rest_framework import serializers
-from rest_framework.exceptions import AuthenticationFailed
+from rest_framework.exceptions import AuthenticationFailed, APIException
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from .models import User
+
+
+def verify_google_id_token(token, client_id):
+    """Verify the signature, issuer, expiry, and audience of a Google ID token."""
+    from google.auth.transport.requests import Request
+    from google.oauth2 import id_token
+
+    return id_token.verify_oauth2_token(
+        token,
+        Request(),
+        audience=client_id,
+    )
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -127,28 +140,18 @@ class GoogleLoginSerializer(serializers.Serializer):
     id_token = serializers.CharField(write_only=True, trim_whitespace=True)
 
     def validate_id_token(self, value):
-        from django.conf import settings
-        from rest_framework.exceptions import APIException
-
         if not settings.GOOGLE_CLIENT_ID:
             raise APIException(
                 'Google sign-in is not configured. Set GOOGLE_CLIENT_ID in .env.'
             )
 
         try:
-            from google.auth.transport.requests import Request
-            from google.oauth2 import id_token as google_id_token
-
-            payload = google_id_token.verify_oauth2_token(
-                value,
-                Request(),
-                audience=settings.GOOGLE_CLIENT_ID,
-            )
+            payload = verify_google_id_token(value, settings.GOOGLE_CLIENT_ID)
         except ImportError as exc:
             raise APIException(
                 'Google sign-in dependency is missing. Install backend requirements.'
             ) from exc
-        except (ValueError, Exception) as exc:
+        except Exception as exc:
             raise serializers.ValidationError(
                 'Google ID token is invalid or expired.'
             ) from exc
