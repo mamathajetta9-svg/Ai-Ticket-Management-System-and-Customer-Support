@@ -1,33 +1,32 @@
 from rest_framework.permissions import BasePermission
 
 
-class IsAdmin(BasePermission):
+class RolePermission(BasePermission):
+    """Base class for role-based API permissions."""
+
+    allowed_roles = ()
+
     def has_permission(self, request, view):
-        return (
-            request.user.is_authenticated
-            and request.user.role == 'ADMIN'
+        user = request.user
+        return bool(
+            user
+            and user.is_authenticated
+            and user.is_active
+            and user.role in self.allowed_roles
         )
 
 
-class IsAgent(BasePermission):
-    def has_permission(self, request, view):
-        return (
-            request.user.is_authenticated
-            and request.user.role == 'AGENT'
-        )
+class IsAdmin(RolePermission):
+    allowed_roles = ("ADMIN",)
 
 
-class IsCustomer(BasePermission):
-    def has_permission(self, request, view):
-        return (
-            request.user.is_authenticated
-            and request.user.role == 'CUSTOMER'
-        )
+class IsAgent(RolePermission):
+    allowed_roles = ("AGENT",)
 
 
-class IsAdminOrAgent(BasePermission):
-    def has_permission(self, request, view):
-        return (
-            request.user.is_authenticated
-            and request.user.role in ['ADMIN', 'AGENT']
-        )
+class IsCustomer(RolePermission):
+    allowed_roles = ("CUSTOMER",)
+
+
+class IsAdminOrAgent(RolePermission):
+    allowed_roles = ("ADMIN", "AGENT")
