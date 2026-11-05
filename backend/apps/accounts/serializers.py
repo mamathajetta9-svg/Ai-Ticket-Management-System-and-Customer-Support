@@ -1,14 +1,16 @@
-from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
+from django.contrib.auth import authenticate
 from django.db.models import Q
 from rest_framework import serializers
 from rest_framework.exceptions import AuthenticationFailed
-from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework_simplejwt.serializers import (
+    TokenObtainPairSerializer,
+    TokenBlacklistSerializer,
+)
 
 from .models import User
 
 
-# Customer Registration
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(
         write_only=True,
@@ -32,8 +34,9 @@ class RegisterSerializer(serializers.ModelSerializer):
         )
 
 
-# JWT Login: the existing "username" field accepts either username or email.
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
+    """Accept username or email in the existing username login field."""
+
     def validate(self, attrs):
         login_value = attrs.get(self.username_field, '').strip()
         password = attrs.get('password')
@@ -70,7 +73,6 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         return token
 
 
-# User Profile
 class ProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
@@ -83,3 +85,42 @@ class ProfileSerializer(serializers.ModelSerializer):
             'date_joined',
         ]
         read_only_fields = fields
+
+
+class AgentCreateSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(
+        write_only=True,
+        validators=[validate_password],
+    )
+
+    class Meta:
+        model = User
+        fields = ['username', 'email', 'password']
+
+    def validate_email(self, value):
+        return value.strip().lower()
+
+    def create(self, validated_data):
+        return User.objects.create_user(
+            **validated_data,
+            role=User.Role.AGENT,
+        )
+
+
+class PasswordChangeSerializer(serializers.Serializer):
+    old_password = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(
+        write_only=True,
+        validators=[validate_password],
+    )
+
+    def validate_old_password(self, value):
+        user = self.context['request'].user
+        if not user.check_password(value):
+            raise serializers.ValidationError('Current password is incorrect.')
+        return value
+
+    def validate_new_password(self, value):
+        user = self.context['request'].user
+        validate_password(value, user=user)
+        return value
