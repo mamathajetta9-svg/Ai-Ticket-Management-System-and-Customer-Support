@@ -3,10 +3,7 @@ from django.contrib.auth import authenticate
 from django.db.models import Q
 from rest_framework import serializers
 from rest_framework.exceptions import AuthenticationFailed
-from rest_framework_simplejwt.serializers import (
-    TokenObtainPairSerializer,
-    TokenBlacklistSerializer,
-)
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from .models import User
 
@@ -123,4 +120,45 @@ class PasswordChangeSerializer(serializers.Serializer):
     def validate_new_password(self, value):
         user = self.context['request'].user
         validate_password(value, user=user)
+        return value
+
+
+class GoogleLoginSerializer(serializers.Serializer):
+    id_token = serializers.CharField(write_only=True, trim_whitespace=True)
+
+    def validate_id_token(self, value):
+        from django.conf import settings
+        from rest_framework.exceptions import APIException
+
+        if not settings.GOOGLE_CLIENT_ID:
+            raise APIException(
+                'Google sign-in is not configured. Set GOOGLE_CLIENT_ID in .env.'
+            )
+
+        try:
+            from google.auth.transport.requests import Request
+            from google.oauth2 import id_token as google_id_token
+
+            payload = google_id_token.verify_oauth2_token(
+                value,
+                Request(),
+                audience=settings.GOOGLE_CLIENT_ID,
+            )
+        except ImportError as exc:
+            raise APIException(
+                'Google sign-in dependency is missing. Install backend requirements.'
+            ) from exc
+        except (ValueError, Exception) as exc:
+            raise serializers.ValidationError(
+                'Google ID token is invalid or expired.'
+            ) from exc
+
+        if not payload.get('email') or payload.get('email_verified') is not True:
+            raise serializers.ValidationError(
+                'Google must provide a verified email address.'
+            )
+        if not payload.get('sub'):
+            raise serializers.ValidationError('Google account ID is missing.')
+
+        self.context['google_payload'] = payload
         return value
