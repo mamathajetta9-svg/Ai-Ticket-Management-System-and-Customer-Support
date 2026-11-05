@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+from django.test import override_settings
 from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -118,29 +119,20 @@ class AccountAuthenticationTests(APITestCase):
             status.HTTP_401_UNAUTHORIZED,
         )
 
-    @patch('apps.accounts.serializers.GoogleLoginSerializer.validate_id_token')
-    def test_google_login_creates_customer_and_returns_jwt(self, mock_verify):
-        mock_verify.return_value = 'mock-google-token'
-        serializer_payload = {
+    @override_settings(GOOGLE_CLIENT_ID='test-google-client-id')
+    @patch('apps.accounts.serializers.verify_google_id_token')
+    def test_google_login_creates_customer_and_returns_jwt(self, verify_token):
+        verify_token.return_value = {
             'sub': 'google-sub-123',
             'email': 'newcustomer@example.com',
             'email_verified': True,
         }
 
-        with patch(
-            'apps.accounts.serializers.GoogleLoginSerializer.validate_id_token',
-            autospec=True,
-        ) as mocked:
-            def validate(serializer, value):
-                serializer.context['google_payload'] = serializer_payload
-                return value
-            mocked.side_effect = validate
-
-            response = self.client.post(
-                '/api/accounts/google/',
-                {'id_token': 'mock-google-token'},
-                format='json',
-            )
+        response = self.client.post(
+            '/api/accounts/google/',
+            {'id_token': 'fake-id-token'},
+            format='json',
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['user']['role'], User.Role.CUSTOMER)
@@ -152,27 +144,20 @@ class AccountAuthenticationTests(APITestCase):
         )
         self.assertIn('access', response.data)
 
-    @patch('apps.accounts.serializers.GoogleLoginSerializer.validate_id_token')
-    def test_google_login_links_existing_verified_email(self, mock_verify):
-        mock_verify.return_value = 'mock-google-token'
-        with patch(
-            'apps.accounts.serializers.GoogleLoginSerializer.validate_id_token',
-            autospec=True,
-        ) as mocked:
-            def validate(serializer, value):
-                serializer.context['google_payload'] = {
-                    'sub': 'google-sub-existing',
-                    'email': self.customer.email,
-                    'email_verified': True,
-                }
-                return value
-            mocked.side_effect = validate
+    @override_settings(GOOGLE_CLIENT_ID='test-google-client-id')
+    @patch('apps.accounts.serializers.verify_google_id_token')
+    def test_google_login_links_existing_verified_email(self, verify_token):
+        verify_token.return_value = {
+            'sub': 'google-sub-existing',
+            'email': self.customer.email,
+            'email_verified': True,
+        }
 
-            response = self.client.post(
-                '/api/accounts/google/',
-                {'id_token': 'mock-google-token'},
-                format='json',
-            )
+        response = self.client.post(
+            '/api/accounts/google/',
+            {'id_token': 'fake-id-token'},
+            format='json',
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.customer.refresh_from_db()
